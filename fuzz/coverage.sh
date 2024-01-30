@@ -1,4 +1,4 @@
-#!/bin/bash -x
+#!/bin/bash
 
 FUZZ_DIR=$(realpath $(dirname "${BASH_SOURCE}"))
 source "${FUZZ_DIR}/_fuzz.env"
@@ -9,7 +9,7 @@ CORPUS="${1}"
 
 if [ -z "$1" ]; then
     # Default to the corpus that was most recently updated
-    CORPUS=$(find "${DATA_DIR}" -mindepth 1 -maxdepth 1 | xargs ls -td | head -n 1)
+    CORPUS="${MOST_RECENT_CORPUS}"
 fi
 
 echo "${CORPUS}"
@@ -20,7 +20,6 @@ echo "${CORPUS}"
 DEVICE=$(basename ${CORPUS})
 echo "${DEVICE}"
 
-CORPUS="${DATA_DIR}/${DEVICE}"
 OUTDIR="${COV_DIR}/${DEVICE}"
 COVFILE="${OUTDIR}/default.profraw"
 DATAFILE="${OUTDIR}/default.profdata"
@@ -32,9 +31,18 @@ set_qemu_device_vars "${DEVICE}"
 
 
 # Run each corpus input once, gather coverage and then exit
-# This creates default.profraw
-( cd "${OUTDIR}" && ${QEMU_COV} --fuzz-target=generic-fuzz "${CORPUS}"/* )
+# This creates default.profraw.0 etc
+# It may create multiples, if there are too many inputs in the corpus for
+# one single invocation
+INPUT_CHUNK=150
+N_INPUTS=$(find "${CORPUS}" -type f | wc -l);
+for START in $(seq 0 ${INPUT_CHUNK} ${N_INPUTS}); do
+  echo "${START}"
+  ( cd "${OUTDIR}" && \
+    find "${CORPUS}" -type f | sort | tail -n +${START} | head -n ${INPUT_CHUNK} \
+    | LLVM_PROFILE_FILE="${COVFILE}.${START}" xargs --no-run-if-empty ${QEMU_COV} --fuzz-target=generic-fuzz )
+done
 
-llvm-profdata-12 merge "-output=${DATAFILE}" "${COVFILE}"
+llvm-profdata-12 merge "-output=${DATAFILE}" "${COVFILE}".*
 llvm-cov-12 show "${QEMU_COV}" "-instr-profile=${DATAFILE}" --format html "-output-dir=${REPORTDIR}"
 llvm-cov-12 export "${QEMU_COV}" "-instr-profile=${DATAFILE}" --format lcov > "${OUTDIR}/coverage.lcov"
